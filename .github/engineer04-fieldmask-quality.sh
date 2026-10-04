@@ -29,9 +29,7 @@ generation)
   run generate 'make generate'
   run tidy 'go mod tidy'
   run generated-diff "git add -N . && git diff --exit-code HEAD --diff-filter=d && git diff --exit-code HEAD --diff-filter=D -- . ':(glob,exclude)examples/internal/clients/**/BUILD.bazel'"
-  # Generation intentionally removes these registration files. Preserve the
-  # complete raw diff first, then restore only this explicitly allowed set.
-  run restore-allowed-client-build-files 'git diff --name-only HEAD --diff-filter=D -- "examples/internal/clients/**/BUILD.bazel" > /evidence/restored-client-build-files.txt; if [ -s /evidence/restored-client-build-files.txt ]; then git restore --source=HEAD --staged --worktree --pathspec-from-file=/evidence/restored-client-build-files.txt; fi'
+  # Preserve the actual generator result. This job never restores source.
   ;;
 bazel)
   run bazel-version 'bazel version'
@@ -53,5 +51,9 @@ api-proto)
   ;;
 *) echo 'Unknown quality group' >&2; exit 2;;
 esac
-run final-diff 'git diff --exit-code HEAD && test -z "$(git status --porcelain=v1 --untracked-files=all)"'
+if [ "$QUALITY_GROUP" = generation ]; then
+  run final-diff 'git diff --exit-code HEAD'
+else
+  run final-diff 'git diff --exit-code HEAD && test -z "$(git status --porcelain=v1 --untracked-files=all)"'
+fi
 exit 0

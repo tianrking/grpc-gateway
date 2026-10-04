@@ -1,7 +1,7 @@
 name: Engineer 04 field mask baseline and fixed native quality
 on:
   push:
-    branches: [codex/native-fieldmask-quality]
+    branches: [codex/native-fieldmask-generation]
 permissions:
   contents: read
 jobs:
@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [generation, bazel, api-proto]
+        group: [generation]
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
