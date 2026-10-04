@@ -1,0 +1,78 @@
+name: Engineer 04 exact baseline and fixed OSS-Fuzz target
+on:
+  push:
+    branches: [codex/native-fieldmask-fuzz]
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [baseline, fixed]
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c9c2765f7df366c9bd8d95de1568aff59341802b
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c4f83bea97976ca1f7f84469425b37ca6765bfef
+          path: fixed
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: google/oss-fuzz
+          ref: 187888a8d1e04b93ebc0de70b87f624c0c136d49
+          path: oss-fuzz
+          persist-credentials: false
+      - name: Preserve exact source and upstream fuzz build recipe
+        run: |
+          mkdir -p evidence
+          python3 helper/.github/engineer04-fieldmask-fuzz-evidence.py before
+          git -C oss-fuzz rev-parse HEAD > evidence/oss-fuzz-sha.txt
+          cp oss-fuzz/projects/grpc-gateway/build.sh evidence/upstream-fuzz-build.sh
+          cp oss-fuzz/projects/grpc-gateway/Dockerfile evidence/upstream-fuzz-Dockerfile
+          python3 -m venv fuzz-tools
+          fuzz-tools/bin/pip install PyYAML requests > evidence/tool-setup.stdout 2> evidence/tool-setup.stderr
+          fuzz-tools/bin/pip freeze > evidence/tool-versions.txt
+      - name: Build exact checked-out source, check target, and fuzz for 600 seconds
+        run: |
+          set +e
+          source_path="$GITHUB_WORKSPACE/${{ matrix.source }}"
+          cd oss-fuzz
+          ../fuzz-tools/bin/python infra/helper.py build_fuzzers --sanitizer address grpc-gateway "$source_path" > ../evidence/build.stdout 2> ../evidence/build.stderr
+          build_exit=$?
+          echo "$build_exit" > ../evidence/build.exit
+          docker image inspect gcr.io/oss-fuzz/grpc-gateway gcr.io/oss-fuzz-base/base-builder-go > ../evidence/actual-images.json 2> ../evidence/actual-images.stderr
+          if [ "$build_exit" = 0 ]; then
+            ../fuzz-tools/bin/python infra/helper.py check_build --sanitizer address grpc-gateway fuzz > ../evidence/check-build.stdout 2> ../evidence/check-build.stderr
+            echo "$?" > ../evidence/check-build.exit
+            ../fuzz-tools/bin/python infra/helper.py run_fuzzer --sanitizer address grpc-gateway fuzz -- -max_total_time=600 > ../evidence/run-fuzzer.stdout 2> ../evidence/run-fuzzer.stderr
+            echo "$?" > ../evidence/run-fuzzer.exit
+            sha256sum build/out/grpc-gateway/fuzz > ../evidence/fuzz-binary.sha256
+          else
+            echo 'Not attempted because actual build failed' > ../evidence/check-and-run-not-attempted.txt
+          fi
+          exit 0
+      - name: Preserve source hashes and require actual successful build and fuzz
+        if: always()
+        run: |
+          python3 helper/.github/engineer04-fieldmask-fuzz-evidence.py after
+          test "$(cat evidence/build.exit)" = 0
+          test "$(cat evidence/check-build.exit)" = 0
+          test "$(cat evidence/run-fuzzer.exit)" = 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fieldmask-oss-fuzz-${{ matrix.source }}
+          path: evidence/
+          retention-days: 30
