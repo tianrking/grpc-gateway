@@ -1,0 +1,73 @@
+name: Engineer 04 exact dynamic empty field mask native
+on:
+  push:
+    branches: [codex/native-fieldmask-final]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [1.26.8, 1.27.1]
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 3f5cfae0233af91729798db76a89873d14112323
+          path: original
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c4f83bea97976ca1f7f84469425b37ca6765bfef
+          path: fixed
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+          cache-dependency-path: fixed/go.sum
+      - name: Record exact frozen source identities
+        run: |
+          mkdir -p evidence
+          go version > evidence/go-version.txt
+          go env > evidence/go-env.txt
+          python helper/.github/engineer04-fieldmask-final-evidence.py before
+      - name: Actual original RED, fixed GREEN and full race tests
+        run: |
+          set +e
+          (cd original && go test -race -json -count=1 -run '^TestFieldMaskDynamicEmptyObjects' ./runtime) > evidence/original-focused.jsonl 2> evidence/original-focused.stderr
+          echo "$?" > evidence/original-focused.exit
+          (cd fixed && go test -race -json -count=1 -run '^TestFieldMaskDynamicEmptyObjects' ./runtime) > evidence/fixed-focused.jsonl 2> evidence/fixed-focused.stderr
+          echo "$?" > evidence/fixed-focused.exit
+          (cd fixed && go test -race -json -count=1 ./...) > evidence/full-race.jsonl 2> evidence/full-race.stderr
+          echo "$?" > evidence/full-race.exit
+          (cd fixed && go vet ./...) > evidence/vet.stdout 2> evidence/vet.stderr
+          echo "$?" > evidence/vet.exit
+          (cd fixed && test -z "$(gofmt -l runtime/fieldmask.go runtime/fieldmask_empty_object_test.go)") > evidence/format.stdout 2> evidence/format.stderr
+          echo "$?" > evidence/format.exit
+          if [ '${{ runner.os }}' != Windows ]; then
+            (cd fixed && go test -race -json -count=1 ./examples/internal/integration -args -network=unix -endpoint=test.sock) > evidence/unix-integration.jsonl 2> evidence/unix-integration.stderr
+            echo "$?" > evidence/unix-integration.exit
+          fi
+          exit 0
+      - name: Preserve results and immutable source manifests
+        if: always()
+        run: |
+          python helper/.github/engineer04-fieldmask-final-evidence.py after
+          python helper/.github/engineer04-fieldmask-final-evidence.py results
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fieldmask-final-${{ matrix.os }}-go-${{ matrix.go }}
+          path: evidence/
+          retention-days: 30
