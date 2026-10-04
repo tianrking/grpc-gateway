@@ -1,0 +1,60 @@
+name: Engineer 04 original dynamic empty field mask
+on:
+  push:
+    branches: [codex/native-fieldmask-original]
+permissions:
+  contents: read
+jobs:
+  original:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [1.26.8, 1.27.1]
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 3f5cfae0233af91729798db76a89873d14112323
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+          cache-dependency-path: source/go.sum
+      - name: Capture immutable original source
+        working-directory: source
+        run: |
+          mkdir -p ../evidence
+          go version > ../evidence/go-version.txt
+          go env > ../evidence/go-env.txt
+          python3 ../helper/.github/engineer04-fieldmask-evidence.py before
+      - name: Actual original regressions and existing controls
+        working-directory: source
+        shell: bash
+        run: |
+          set +e
+          go test -race -json -count=1 -run '^TestFieldMaskDynamicEmptyObjects' ./runtime > ../evidence/original-focused.jsonl 2> ../evidence/original-focused.stderr
+          echo "$?" > ../evidence/original-focused.exit
+          go test -race -json -count=1 -run '^(TestFieldMaskFromRequestBody|TestFieldMaskRepeatedFieldsLast|TestFieldMaskErrors)$' ./runtime > ../evidence/existing-controls.jsonl 2> ../evidence/existing-controls.stderr
+          echo "$?" > ../evidence/existing-controls.exit
+          gofmt runtime/fieldmask_empty_object_test.go > ../evidence/fieldmask_empty_object_test.formatted.go
+          echo "$?" > ../evidence/gofmt.exit
+          exit 0
+      - name: Preserve hashes and classify actual results
+        if: always()
+        working-directory: source
+        run: |
+          python3 ../helper/.github/engineer04-fieldmask-evidence.py after
+          python3 ../helper/.github/engineer04-fieldmask-evidence.py results
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fieldmask-original-go-${{ matrix.go }}
+          path: evidence/
+          retention-days: 30
