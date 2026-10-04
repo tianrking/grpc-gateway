@@ -1,0 +1,92 @@
+name: Engineer 04 Unix baseline failure and configured transport
+on:
+  push:
+    branches: [codex/native-fieldmask-unix]
+permissions:
+  contents: read
+jobs:
+  unix:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [1.26.8, 1.27.1]
+        os: [ubuntu-24.04, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c9c2765f7df366c9bd8d95de1568aff59341802b
+          path: baseline/grpc-gateway
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c4f83bea97976ca1f7f84469425b37ca6765bfef
+          path: fixed/grpc-gateway
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+          cache-dependency-path: fixed/grpc-gateway/go.sum
+      - name: Preserve exact source and explicit test-only resolver fixture
+        run: |
+          mkdir -p evidence
+          go version > evidence/go-version.txt
+          python3 helper/.github/engineer04-fieldmask-unix-evidence.py before
+          cp helper/.github/engineer04-passthrough-native-fixture.go evidence/resolver-fixture.go
+      - name: Actual pristine baseline upstream Unix command
+        run: |
+          set +e
+          (cd baseline/grpc-gateway && go test -race -json -count=1 ./examples/internal/integration -args -network=unix -endpoint=test.sock) > evidence/baseline-unmodified-unix.jsonl 2> evidence/baseline-unmodified-unix.stderr
+          echo "$?" > evidence/baseline-unmodified-unix.exit
+          exit 0
+      - name: Actual generated HTTP and gRPC Unix integration with explicit passthrough test configuration
+        run: |
+          set +e
+          for source in baseline fixed; do
+            root="$PWD/$source/grpc-gateway"
+            socket="$root/examples/internal/integration/test.sock"
+            ls -l "$socket" > "evidence/$source-socket-before.txt" 2>&1
+            if [ -S "$socket" ]; then rm -- "$socket"; fi
+            SOURCE_ROOT="$root" python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['SOURCE_ROOT'])
+          mapping = {str(root / 'examples/internal/integration/engineer04_resolver_native_test.go'): str(pathlib.Path('evidence/resolver-fixture.go').resolve())}
+          pathlib.Path('evidence/overlay.json').write_text(json.dumps({'Replace': mapping}, indent=2))
+          PY
+            cp evidence/overlay.json "evidence/$source-overlay.json"
+            (cd "$root" && go test -overlay="$GITHUB_WORKSPACE/evidence/overlay.json" -race -json -count=1 ./examples/internal/integration -args -network=unix -endpoint=test.sock) > "evidence/$source-configured-unix.jsonl" 2> "evidence/$source-configured-unix.stderr"
+            echo "$?" > "evidence/$source-configured-unix.exit"
+          done
+          exit 0
+      - name: Preserve unchanged source and require successful configured transport
+        if: always()
+        run: |
+          python3 helper/.github/engineer04-fieldmask-unix-evidence.py after
+          test "$(cat evidence/baseline-configured-unix.exit)" = 0
+          test "$(cat evidence/fixed-configured-unix.exit)" = 0
+          python3 - <<'PY'
+          import json, pathlib
+          for source in ('baseline', 'fixed'):
+              text = pathlib.Path(f'evidence/{source}-configured-unix.jsonl').read_text()
+              if 'ENGINEER04_TEST_ONLY_RESOLVER before=dns after=passthrough' not in text:
+                  raise SystemExit('Explicit resolver fixture was not compiled/executed')
+              events = [json.loads(line) for line in text.splitlines()]
+              if any(e['Action'] == 'fail' for e in events):
+                  raise SystemExit('Actual configured Unix integration failed')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fieldmask-unix-${{ matrix.os }}-go-${{ matrix.go }}
+          path: evidence/
+          retention-days: 30
