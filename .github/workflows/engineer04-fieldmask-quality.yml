@@ -8,6 +8,10 @@ jobs:
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [generation, bazel, api-proto]
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -17,12 +21,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: c9c2765f7df366c9bd8d95de1568aff59341802b
-          path: baseline
+          path: baseline/grpc-gateway
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: c4f83bea97976ca1f7f84469425b37ca6765bfef
-          path: fixed
+          path: fixed/grpc-gateway
           persist-credentials: false
       - name: Retain exact pre-generation source hashes
         run: python3 helper/.github/engineer04-fieldmask-quality-evidence.py before
@@ -40,13 +44,14 @@ jobs:
           for source in baseline fixed; do
             mkdir -p "evidence/$source"
             docker run --rm \
-              -v "$PWD/$source:/workspace" \
+              -v "$PWD/$source/grpc-gateway:/grpc-gateway" \
               -v "$PWD/evidence/$source:/evidence" \
               -v "$PWD/helper/.github:/helper:ro" \
               -v fieldmask-go-cache:/root/.cache/go-build \
               -v fieldmask-go-mod:/go/pkg/mod \
               -v fieldmask-bazel-cache:/root/.cache/bazel \
-              -w /workspace \
+              -e QUALITY_GROUP='${{ matrix.group }}' \
+              -w /grpc-gateway \
               ghcr.io/grpc-ecosystem/grpc-gateway/build-env@sha256:368299810949d0d4c796f171b18f6e5def481feb7b3fddbece2ab827148c0312 \
               /bin/bash /helper/engineer04-fieldmask-quality.sh
           done
@@ -54,10 +59,10 @@ jobs:
         if: always()
         run: |
           python3 helper/.github/engineer04-fieldmask-quality-evidence.py after
-          python3 helper/.github/engineer04-fieldmask-quality-evidence.py results
+          python3 helper/.github/engineer04-fieldmask-quality-evidence.py '${{ matrix.group }}'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: fieldmask-baseline-fixed-quality
+          name: fieldmask-baseline-fixed-quality-${{ matrix.group }}
           path: evidence/
           retention-days: 30

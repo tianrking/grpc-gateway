@@ -6,7 +6,7 @@ import sys
 
 out = pathlib.Path('evidence')
 out.mkdir(exist_ok=True)
-sources = {'baseline': 'c9c2765f7df366c9bd8d95de1568aff59341802b', 'fixed': 'c4f83bea97976ca1f7f84469425b37ca6765bfef'}
+sources = {'baseline/grpc-gateway': 'c9c2765f7df366c9bd8d95de1568aff59341802b', 'fixed/grpc-gateway': 'c4f83bea97976ca1f7f84469425b37ca6765bfef'}
 
 
 def git(root, *args):
@@ -34,9 +34,16 @@ def snapshot(label):
 if sys.argv[1] in ('before', 'after'):
     snapshot(sys.argv[1])
 else:
-    summary = {root: {p.stem: int(p.read_text()) for p in (out / root).glob('*.exit')} for root in sources}
+    summary = {root: {p.stem: int(p.read_text()) for p in (out / root).glob('*.exit')} for root in ('baseline', 'fixed')}
     (out / 'quality-results.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
-    expected = {'bazel-version', 'install', 'clean', 'generate', 'tidy', 'generated-diff', 'gazelle', 'repositories', 'buildifier', 'bazel-race', 'staticcheck', 'gorelease', 'vet', 'proto-build', 'proto-lint', 'proto-format', 'proto-breaking', 'format', 'final-diff'}
-    if any(set(results) != expected or any(results.values()) for results in summary.values()):
+    expected = {'generation': {'install', 'clean', 'generate', 'tidy', 'generated-diff', 'restore-allowed-client-build-files', 'final-diff'}, 'bazel': {'bazel-version', 'gazelle', 'repositories', 'buildifier', 'bazel-race', 'final-diff'}, 'api-proto': {'install', 'staticcheck', 'gorelease', 'vet', 'proto-build', 'proto-lint', 'proto-format', 'proto-breaking', 'format-list', 'changed-format', 'final-diff'}}[sys.argv[1]]
+    optional = {'vet'} if sys.argv[1] == 'api-proto' else set()
+    if any(set(results) != expected or any(code for name, code in results.items() if name not in optional) for results in summary.values()):
         raise SystemExit('Actual native quality incomplete or failed; retained baseline/fixed command exits are authoritative')
+    if optional:
+        if summary['baseline']['vet'] != summary['fixed']['vet'] or (out / 'baseline/vet.stderr').read_bytes() != (out / 'fixed/vet.stderr').read_bytes():
+            raise SystemExit('Supplemental vet differs from pristine baseline')
+        if (out / 'baseline/format-list.stdout').read_bytes() != (out / 'fixed/format-list.stdout').read_bytes():
+            raise SystemExit('Whole-source formatting list differs from pristine baseline')
+        print('Supplemental vet raw failures and whole-source formatting list preserved; matched actual pristine baseline')
